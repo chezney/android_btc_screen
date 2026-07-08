@@ -72,7 +72,9 @@ public class FloatingWidgetService extends Service {
     private double lastPrice = -1;
     private double[] closeHistory; // closes of the last 289 5m candles, oldest first
     private long historyFetchedAt;
-    private boolean expanded; // tap toggles: compact price-only vs full stats
+    private boolean expanded; // tap toggles: compact (price + 5m/15m) vs full stats
+    private CharSequence pctCompact; // "5m … 15m …"           (main thread only)
+    private CharSequence pctFull;    // all five windows, 2 rows (main thread only)
 
     @Override
     public void onCreate() {
@@ -145,10 +147,14 @@ public class FloatingWidgetService extends Service {
         windowManager.addView(widgetView, widgetParams);
     }
 
-    /** Compact: small price only. Expanded: label + bigger price + % rows. */
+    /** Compact: small price + 5m/15m. Expanded: label + bigger price + all windows. */
     private void applyExpandedState() {
         labelText.setVisibility(expanded ? View.VISIBLE : View.GONE);
-        pctText.setVisibility(expanded && pctText.length() > 0 ? View.VISIBLE : View.GONE);
+        CharSequence pcts = expanded ? pctFull : pctCompact;
+        if (pcts != null) {
+            pctText.setText(pcts);
+        }
+        pctText.setVisibility(pcts != null ? View.VISIBLE : View.GONE);
         priceText.setTextSize(TypedValue.COMPLEX_UNIT_SP, expanded ? 18 : 14);
         int padH = dp(expanded ? 14 : 10);
         int padV = dp(expanded ? 8 : 5);
@@ -272,16 +278,16 @@ public class FloatingWidgetService extends Service {
                                 : price < lastPrice ? 0xFFEF5350
                                 : Color.WHITE;
                         lastPrice = price;
-                        final CharSequence pcts = buildPctLine(price);
+                        final CharSequence compact = buildPctLine(price, 2);
+                        final CharSequence full = buildPctLine(price, WINDOW_LABELS.length);
                         mainHandler.post(new Runnable() {
                             @Override
                             public void run() {
                                 priceText.setText(formatted);
                                 priceText.setTextColor(color);
                                 labelText.setText("BTC / USDT · Binance");
-                                if (pcts != null) {
-                                    pctText.setText(pcts);
-                                }
+                                pctCompact = compact;
+                                pctFull = full;
                                 applyExpandedState();
                             }
                         });
@@ -320,21 +326,22 @@ public class FloatingWidgetService extends Service {
     }
 
     /**
-     * "5m +0.12  15m −0.34  1h +1.20  4h +2.05  24h −3.10" (values in %),
-     * each number tinted green/red. Null until candle history is available.
+     * First `count` change windows as one line, e.g. "5m +0.12%  15m −0.34%",
+     * each value tinted green/red; the full five-window version breaks into
+     * two rows before "1h". Null until candle history is available.
      */
-    private CharSequence buildPctLine(double price) {
+    private CharSequence buildPctLine(double price, int count) {
         double[] history = closeHistory;
-        if (history == null || history.length < WINDOW_CANDLES[WINDOW_CANDLES.length - 1] + 1) {
+        if (history == null || history.length < WINDOW_CANDLES[count - 1] + 1) {
             return null;
         }
         SpannableStringBuilder line = new SpannableStringBuilder();
-        for (int i = 0; i < WINDOW_LABELS.length; i++) {
+        for (int i = 0; i < count; i++) {
             // close of the candle N slots back ≈ price that long ago
             double then = history[history.length - 1 - WINDOW_CANDLES[i]];
             double pct = (price - then) / then * 100.0;
             if (i > 0) {
-                line.append(i == 2 ? "\n" : "  "); // two windows on row 1, three on row 2
+                line.append(i == 2 ? "\n" : "  "); // in the full view: 2 rows
             }
             line.append(WINDOW_LABELS[i]).append(' ');
             int start = line.length();
