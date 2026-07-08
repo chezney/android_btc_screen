@@ -76,10 +76,25 @@ public class FloatingWidgetService extends Service {
     private CharSequence pctCompact; // "5m … 15m …"           (main thread only)
     private CharSequence pctFull;    // all five windows, 2 rows (main thread only)
 
+    private BitfinexClient bitfinex; // null when no API key is configured
+    private TextView pnlText;
+    private long pnlFetchedAt;
+    private double pnlTotal = Double.NaN;
+    private int pnlPositions;
+    private boolean pnlError;
+    private static final long PNL_REFRESH_MS = 10000;
+
     @Override
     public void onCreate() {
         super.onCreate();
         startInForeground();
+        android.content.SharedPreferences prefs =
+                getSharedPreferences(MainActivity.PREFS, MODE_PRIVATE);
+        String key = prefs.getString(MainActivity.PREF_BFX_KEY, "");
+        String secret = prefs.getString(MainActivity.PREF_BFX_SECRET, "");
+        if (key.length() > 0 && secret.length() > 0) {
+            bitfinex = new BitfinexClient(key, secret);
+        }
         windowManager = (WindowManager) getSystemService(WINDOW_SERVICE);
         createWidget();
         createDismissTarget();
@@ -124,6 +139,13 @@ public class FloatingWidgetService extends Service {
         priceText.setTextSize(TypedValue.COMPLEX_UNIT_SP, 18);
         widgetView.addView(priceText);
 
+        pnlText = new TextView(this);
+        pnlText.setTypeface(Typeface.MONOSPACE);
+        pnlText.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11);
+        pnlText.setGravity(Gravity.CENTER_HORIZONTAL);
+        pnlText.setVisibility(View.GONE); // shown once Bitfinex PnL arrives
+        widgetView.addView(pnlText);
+
         pctText = new TextView(this);
         pctText.setTextColor(0xB3FFFFFF);
         pctText.setTypeface(Typeface.MONOSPACE);
@@ -155,6 +177,7 @@ public class FloatingWidgetService extends Service {
             pctText.setText(pcts);
         }
         pctText.setVisibility(pcts != null ? View.VISIBLE : View.GONE);
+        pnlText.setVisibility(pnlText.length() > 0 ? View.VISIBLE : View.GONE);
         priceText.setTextSize(TypedValue.COMPLEX_UNIT_SP, expanded ? 18 : 14);
         int padH = dp(expanded ? 14 : 10);
         int padV = dp(expanded ? 8 : 5);
@@ -273,6 +296,18 @@ public class FloatingWidgetService extends Service {
                                 // keep showing the last good history
                             }
                         }
+                        if (bitfinex != null
+                                && System.currentTimeMillis() - pnlFetchedAt > PNL_REFRESH_MS) {
+                            try {
+                                double[] pnl = bitfinex.fetchPositionsPnl();
+                                pnlTotal = pnl[0];
+                                pnlPositions = (int) pnl[1];
+                                pnlError = false;
+                            } catch (Exception e) {
+                                pnlError = true;
+                            }
+                            pnlFetchedAt = System.currentTimeMillis();
+                        }
                         final String formatted = usd.format(price);
                         final int color = price > lastPrice && lastPrice > 0 ? 0xFF4CAF50
                                 : price < lastPrice ? 0xFFEF5350
@@ -280,6 +315,9 @@ public class FloatingWidgetService extends Service {
                         lastPrice = price;
                         final CharSequence compact = buildPctLine(price, 2);
                         final CharSequence full = buildPctLine(price, WINDOW_LABELS.length);
+                        final String pnlLine = buildPnlLine();
+                        final int pnlColor = pnlTotal > 0 ? 0xFF4CAF50
+                                : pnlTotal < 0 ? 0xFFEF5350 : 0xB3FFFFFF;
                         mainHandler.post(new Runnable() {
                             @Override
                             public void run() {
@@ -288,6 +326,10 @@ public class FloatingWidgetService extends Service {
                                 labelText.setText("BTC / USDT · Binance");
                                 pctCompact = compact;
                                 pctFull = full;
+                                if (pnlLine != null) {
+                                    pnlText.setText(pnlLine);
+                                    pnlText.setTextColor(pnlColor);
+                                }
                                 applyExpandedState();
                             }
                         });
@@ -323,6 +365,33 @@ public class FloatingWidgetService extends Service {
             closes[i] = candles.getJSONArray(i).getDouble(4); // index 4 = close
         }
         return closes;
+    }
+
+    /**
+     * "PnL +$12.34 · 2 pos" from Bitfinex open positions; "PnL —" while it
+     * cannot be fetched; null when no API key is configured or nothing
+     * arrived yet.
+     */
+    private String buildPnlLine() {
+        if (bitfinex == null) {
+            return null;
+        }
+        if (pnlError && Double.isNaN(pnlTotal)) {
+            return "PnL —";
+        }
+        if (Double.isNaN(pnlTotal)) {
+            return null;
+        }
+        String amount = String.format(Locale.US, "%+,.2f", pnlTotal);
+        String line = "PnL " + (amount.charAt(0) == '-'
+                ? "-$" + amount.substring(1) : "+$" + amount.substring(1));
+        if (pnlPositions != 1) {
+            line += " · " + pnlPositions + " pos";
+        }
+        if (pnlError) {
+            line += " (stale)";
+        }
+        return line;
     }
 
     /**
