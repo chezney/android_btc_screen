@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- orange coin -->
+    <path
+        android:fillColor="#F7931A"
+        android:pathData="M54,54m-50,0a50,50 0,1 1,100 0a50,50 0,1 1,-100 0" />
+    <!-- simplified white B glyph -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M40,26h8v-8h8v8h4v-8h8v8.5c8,1.5 13,6 13,13.5c0,5 -2.5,8.5 -6.5,10.5c5.5,2 9.5,6 9.5,12.5c0,9 -6.5,14 -16,15.5v8.5h-8v-8h-4v8h-8v-8h-8v-9h6V35h-6v-9h6zM48,35v13h12c5,0 8,-2.5 8,-6.5c0,-4 -3,-6.5 -8,-6.5zM48,57v16h14c5.5,0 9,-3 9,-8c0,-5 -3.5,-8 -9,-8z" />
+</vector>
