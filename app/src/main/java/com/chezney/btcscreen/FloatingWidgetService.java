@@ -25,6 +25,11 @@ import android.view.WindowManager;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 
+import android.text.SpannableStringBuilder;
+import android.text.Spanned;
+import android.text.style.ForegroundColorSpan;
+
+import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.io.BufferedReader;
@@ -44,12 +49,20 @@ public class FloatingWidgetService extends Service {
     private static final String CHANNEL_ID = "btc_widget";
     private static final String PRICE_URL =
             "https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT";
+    // 289 five-minute candles = just over 24h of history, refreshed every 30s
+    private static final String KLINES_URL =
+            "https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=5m&limit=289";
     private static final long POLL_MS = 2000;
+    private static final long KLINES_REFRESH_MS = 30000;
+
+    private static final String[] WINDOW_LABELS = {"5m", "15m", "1h", "4h", "24h"};
+    private static final int[] WINDOW_CANDLES = {1, 3, 12, 48, 288}; // 5m candles back
 
     private WindowManager windowManager;
     private LinearLayout widgetView;
     private TextView priceText;
     private TextView labelText;
+    private TextView pctText;
     private TextView dismissView;
     private WindowManager.LayoutParams widgetParams;
 
@@ -57,6 +70,8 @@ public class FloatingWidgetService extends Service {
     private Thread pollThread;
     private volatile boolean running = true;
     private double lastPrice = -1;
+    private double[] closeHistory; // closes of the last 289 5m candles, oldest first
+    private long historyFetchedAt;
 
     @Override
     public void onCreate() {
@@ -105,6 +120,14 @@ public class FloatingWidgetService extends Service {
         priceText.setTypeface(Typeface.DEFAULT_BOLD);
         priceText.setTextSize(TypedValue.COMPLEX_UNIT_SP, 18);
         widgetView.addView(priceText);
+
+        pctText = new TextView(this);
+        pctText.setTextColor(0xB3FFFFFF);
+        pctText.setTypeface(Typeface.MONOSPACE);
+        pctText.setTextSize(TypedValue.COMPLEX_UNIT_SP, 10);
+        pctText.setGravity(Gravity.CENTER_HORIZONTAL);
+        pctText.setVisibility(View.GONE); // shown once candle history arrives
+        widgetView.addView(pctText);
 
         widgetParams = new WindowManager.LayoutParams(
                 WindowManager.LayoutParams.WRAP_CONTENT,
@@ -220,17 +243,30 @@ public class FloatingWidgetService extends Service {
                 while (running) {
                     try {
                         double price = fetchPrice();
+                        if (System.currentTimeMillis() - historyFetchedAt > KLINES_REFRESH_MS) {
+                            try {
+                                closeHistory = fetchCloseHistory();
+                                historyFetchedAt = System.currentTimeMillis();
+                            } catch (Exception ignored) {
+                                // keep showing the last good history
+                            }
+                        }
                         final String formatted = usd.format(price);
                         final int color = price > lastPrice && lastPrice > 0 ? 0xFF4CAF50
                                 : price < lastPrice ? 0xFFEF5350
                                 : Color.WHITE;
                         lastPrice = price;
+                        final CharSequence pcts = buildPctLine(price);
                         mainHandler.post(new Runnable() {
                             @Override
                             public void run() {
                                 priceText.setText(formatted);
                                 priceText.setTextColor(color);
                                 labelText.setText("BTC / USDT · Binance");
+                                if (pcts != null) {
+                                    pctText.setText(pcts);
+                                    pctText.setVisibility(View.VISIBLE);
+                                }
                             }
                         });
                     } catch (Exception e) {
@@ -254,7 +290,48 @@ public class FloatingWidgetService extends Service {
     }
 
     private double fetchPrice() throws Exception {
-        HttpURLConnection conn = (HttpURLConnection) new URL(PRICE_URL).openConnection();
+        return new JSONObject(httpGet(PRICE_URL)).getDouble("price");
+    }
+
+    /** Closing price of each of the last 289 five-minute candles, oldest first. */
+    private double[] fetchCloseHistory() throws Exception {
+        JSONArray candles = new JSONArray(httpGet(KLINES_URL));
+        double[] closes = new double[candles.length()];
+        for (int i = 0; i < candles.length(); i++) {
+            closes[i] = candles.getJSONArray(i).getDouble(4); // index 4 = close
+        }
+        return closes;
+    }
+
+    /**
+     * "5m +0.12  15m −0.34  1h +1.20  4h +2.05  24h −3.10" (values in %),
+     * each number tinted green/red. Null until candle history is available.
+     */
+    private CharSequence buildPctLine(double price) {
+        double[] history = closeHistory;
+        if (history == null || history.length < WINDOW_CANDLES[WINDOW_CANDLES.length - 1] + 1) {
+            return null;
+        }
+        SpannableStringBuilder line = new SpannableStringBuilder();
+        for (int i = 0; i < WINDOW_LABELS.length; i++) {
+            // close of the candle N slots back ≈ price that long ago
+            double then = history[history.length - 1 - WINDOW_CANDLES[i]];
+            double pct = (price - then) / then * 100.0;
+            if (i > 0) {
+                line.append(i == 2 ? "\n" : "  "); // two windows on row 1, three on row 2
+            }
+            line.append(WINDOW_LABELS[i]).append(' ');
+            int start = line.length();
+            line.append(String.format(Locale.US, "%+.2f%%", pct));
+            int color = pct > 0 ? 0xFF4CAF50 : pct < 0 ? 0xFFEF5350 : 0xFFFFFFFF;
+            line.setSpan(new ForegroundColorSpan(color), start, line.length(),
+                    Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+        }
+        return line;
+    }
+
+    private String httpGet(String url) throws Exception {
+        HttpURLConnection conn = (HttpURLConnection) new URL(url).openConnection();
         conn.setConnectTimeout(5000);
         conn.setReadTimeout(5000);
         try (BufferedReader reader =
@@ -264,7 +341,7 @@ public class FloatingWidgetService extends Service {
             while ((line = reader.readLine()) != null) {
                 body.append(line);
             }
-            return new JSONObject(body.toString()).getDouble("price");
+            return body.toString();
         } finally {
             conn.disconnect();
         }
