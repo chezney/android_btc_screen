@@ -72,6 +72,7 @@ public class FloatingWidgetService extends Service {
     private double lastPrice = -1;
     private double[] closeHistory; // closes of the last 289 5m candles, oldest first
     private long historyFetchedAt;
+    private boolean expanded; // tap toggles: compact price-only vs full stats
 
     @Override
     public void onCreate() {
@@ -140,7 +141,18 @@ public class FloatingWidgetService extends Service {
         widgetParams.y = dp(120);
 
         widgetView.setOnTouchListener(new DragToDismissListener());
+        applyExpandedState();
         windowManager.addView(widgetView, widgetParams);
+    }
+
+    /** Compact: small price only. Expanded: label + bigger price + % rows. */
+    private void applyExpandedState() {
+        labelText.setVisibility(expanded ? View.VISIBLE : View.GONE);
+        pctText.setVisibility(expanded && pctText.length() > 0 ? View.VISIBLE : View.GONE);
+        priceText.setTextSize(TypedValue.COMPLEX_UNIT_SP, expanded ? 18 : 14);
+        int padH = dp(expanded ? 14 : 10);
+        int padV = dp(expanded ? 8 : 5);
+        widgetView.setPadding(padH, padV, padH, padV);
     }
 
     private void createDismissTarget() {
@@ -208,6 +220,10 @@ public class FloatingWidgetService extends Service {
                     dismissView.setVisibility(View.GONE);
                     if (kill) {
                         stopSelf();
+                    } else if (!dragging && event.getActionMasked() == MotionEvent.ACTION_UP) {
+                        // plain tap: toggle compact <-> expanded
+                        expanded = !expanded;
+                        applyExpandedState();
                     }
                     return true;
             }
@@ -265,8 +281,8 @@ public class FloatingWidgetService extends Service {
                                 labelText.setText("BTC / USDT · Binance");
                                 if (pcts != null) {
                                     pctText.setText(pcts);
-                                    pctText.setVisibility(View.VISIBLE);
                                 }
+                                applyExpandedState();
                             }
                         });
                     } catch (Exception e) {

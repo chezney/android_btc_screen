@@ -49,7 +49,7 @@ rm -rf "$BUILD/res.zip" "$BUILD/linked.apk" "$BUILD/classes" "$BUILD/classes.dex
     -I "$TOOLS/android.jar" \
     --manifest "$SRC/AndroidManifest.xml" \
     --min-sdk-version 26 --target-sdk-version 34 \
-    --version-code 2 --version-name 1.1 \
+    --version-code 3 --version-name 1.2 \
     "$BUILD/res.zip"
 
 # --------------------------------------------------------------------- code
